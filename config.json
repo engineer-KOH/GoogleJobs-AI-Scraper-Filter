@@ -1,0 +1,18 @@
+{
+  "search_conditions": {
+    "location": {
+      "values": ["大阪府","京都府","兵庫県"],
+      "mode": "OR"
+    },
+    "keyword": {
+      "values": ["Python"],
+      "mode": "AND"
+    },
+    "age_limit": null,
+    "min_salary": 350000,
+    "target_sources": []
+  },
+  "api_settings": {
+    "api_url": "https://example.com"
+  }
+}
