@@ -74,7 +74,6 @@ def inspect_companies_batch_with_gemini(matched_jobs):
     for attempt in range(1, max_retries + 1):
         print(f"🚀 Sending {len(matched_jobs)} jobs to AI ({model_name})... (Attempt: {attempt}/{max_retries})")
 
-        # 🟢 ネットワーク通信（タイムアウト等が起きる場所）だけを try ブロックで囲む
         try:
             response = client.models.generate_content(
                 model=model_name,
@@ -89,14 +88,13 @@ def inspect_companies_batch_with_gemini(matched_jobs):
             if attempt < max_retries:
                 sleep_sec = attempt * 5
                 time.sleep(sleep_sec)
-                continue  # 次のリトライループへ進む
+                continue
             else:
                 print("❌ AI connection failed. Proceeding without AI classification.")
                 for job in matched_jobs:
                     job["is_ses_or_dispatch"] = False
                 return matched_jobs
 
-        # 🟢 通信成功後のデータ処理（JSONパースやマッピング）は try ブロックの外に出す
         res_text = response.text.strip()
         data_list = json.loads(res_text)
         result_map = {item.get("id"): item for item in data_list}
@@ -111,25 +109,12 @@ def inspect_companies_batch_with_gemini(matched_jobs):
                 job["business_summary"] = f"【派遣・SES業】{summary}"
             else:
                 job["business_summary"] = summary
-
         return matched_jobs
 
-#        except Exception as e:
-#            print(f"⚠️ AI検証呼び出しエラー (試行 {attempt}/{max_retries}): {e}")
-#            if attempt < max_retries:
-#                sleep_sec = attempt * 5
-#                print(f"⏳ {sleep_sec} 秒後に再試行します...")
-#                time.sleep(sleep_sec)
-#            else:
-#                print("❌ AI判定に失敗しました。今回はAI判定なし（通常出力）で続行します。")
-#                for job in matched_jobs:
-#                    job["is_ses_or_dispatch"] = False
-#                return matched_jobs
-
 def fetch_google_jobs(keyword_query, location):
-    """求人情報収集関数"""
+    """Job scraping function"""
     loc_str = str(location).strip() if location and str(location).lower() != "null" else ""
-    print(f"\n🔍 Google Jobs より求人情報を収集します... [{keyword_query} × {loc_str or '全国'}]")
+    print(f"\n🔍 Scrapes job postings from Google Jobs. [{keyword_query} × {loc_str or '全国'}]")
 
     raw_query = f"{keyword_query} 求人 {loc_str}".strip()
     encoded_query = urllib.parse.quote(raw_query)
@@ -178,7 +163,7 @@ def fetch_google_jobs(keyword_query, location):
 
             page = context.new_page()
 
-            print(f"📡 アクセス中: {google_search_url}")
+            print(f"📡 Now Scraping: {google_search_url}")
             page.goto(google_search_url, timeout=30000, wait_until="domcontentloaded")
             page.wait_for_timeout(random.randint(2000, 3000))
 
@@ -187,9 +172,9 @@ def fetch_google_jobs(keyword_query, location):
             
             content = page.locator("body").inner_text()
             if "ロボット" in content or "unusual traffic" in content or "CAPTCHA" in content:
-                print("🚨 警告: Googleのボットブロック（CAPTCHA）を検知しました。")
-                print("💡 ブラウザ画面が表示されているため、手動で一度パズルや認証をクリアしてください。")
-                input("👉 ブラウザ上でロボット認証をクリアした後、Enterキーを押してください...")
+                print("🚨 Warning: Google bot block (CAPTCHA) detected.")
+                print("💡 Please solve the puzzle or authentication manually on the browser screen.")
+                input("👉 Please clear the robot verification on the browser, then press Enter...")
 
             try:
                 more_jobs_btn = page.query_selector("a[href*='udm=jobs'], div[role='button']:has-text('求人'), a:has-text('求人')")
@@ -208,12 +193,12 @@ def fetch_google_jobs(keyword_query, location):
         for i, line in enumerate(lines):
 
             if "提供元:" in line or "via" in line:
-                title = lines[i-2] if i >= 2 else (lines[i-1] if i >= 1 else "記載なし")
-                company = lines[i-1] if i >= 1 else "社名非公開"
+                title = lines[i-2] if i >= 2 else (lines[i-1] if i >= 1 else "N/A")
+                company = lines[i-1] if i >= 1 else "Confidential"
                 source_raw = line
                 
-                loc = loc_str if loc_str else "指定なし"
-                salary = "条件欄参照"
+                loc = loc_str if loc_str else "Not specified"
+                salary = "See description"
                 
                 desc_chunks = []
                 for offset in range(1, 10):
@@ -254,9 +239,9 @@ def fetch_google_jobs(keyword_query, location):
             return unique_jobs
 
     except Exception as e:
-        print(f"⚠️ [{loc_str}] 取得例外が発生しました ({e})。")
+        print(f"⚠️ [{loc_str}] Fetch exception occurred. ({e})。")
 
-    print(f"⚠️ [{loc_str}] リアルタイム取得失敗。バックアップデータを展開します。")
+    print(f"⚠️ [{loc_str}] Real-time fetch failed. Loading backup data...")
     return [
         {
             "title": "エンジニア求人（開発業務）",
@@ -269,9 +254,9 @@ def fetch_google_jobs(keyword_query, location):
     ]
 
 def clean_source_name(source_str):
-    """「提供元: doda」などの文字列から媒体名だけを綺麗に抽出する関数"""
+    """Extracts the clean source site name from the raw source string."""
     if not source_str:
-        return "不明"
+        return "Unknown"
     cleaned = source_str.replace("提供元:", "").replace("via", "").strip()
     if "•" in cleaned:
         parts = [p.strip() for p in cleaned.split("•") if p.strip()]
@@ -282,7 +267,7 @@ def clean_source_name(source_str):
     return cleaned
 
 def parse_salary_to_monthly(salary_str):
-    """給与条件の文字列から下限額を抽出し、月給換算値（数値）を返す関数"""
+    """Extracts the minimum salary from the raw string and converts it to a monthly numeric value."""
     if not salary_str or "条件欄参照" in salary_str:
         return 0
     
@@ -311,9 +296,8 @@ def parse_salary_to_monthly(salary_str):
 
 def filter_jobs_by_profile(job_list, keyword_config, exclude_private_company=True, target_sources=None, min_salary=0):
     """
-    一次フィルタリング関数（keyword の AND / OR モード対応）
+    Primary filtering function for job data, handles keyword logic in AND / OR modes.
     """
-    # 構造体（辞書）かリスト・文字列かに応じてキーワードとモードを安全に取得
     if isinstance(keyword_config, dict):
         kw_values = keyword_config.get("values", [])
         kw_mode = keyword_config.get("mode", "OR").upper()
@@ -351,14 +335,11 @@ def filter_jobs_by_profile(job_list, keyword_config, exclude_private_company=Tru
             if any(ng_word in company_name for ng_word in ng_company_words):
                 continue
 
-        # キーワードのヒット判定（AND / OR の切り替え）
         if target_keywords:
             if kw_mode == "AND":
-                # 指定されたすべてのキーワードが含まれているか
                 is_keyword_matched = all(kw in text_content for kw in target_keywords)
                 hits = target_keywords if is_keyword_matched else []
             else:
-                # 指定されたキーワードのいずれか（OR）が含まれているか
                 hits = [kw for kw in target_keywords if kw in text_content]
                 is_keyword_matched = len(hits) >= 1
             
@@ -374,9 +355,9 @@ def filter_jobs_by_profile(job_list, keyword_config, exclude_private_company=Tru
     return filtered_jobs
 
 def export_to_excel(jobs_data, keyword_display, locations):
-    """選別された求人リストを Excel ファイルへ出力する関数"""
+    """Function to export structured job data into an Excel spreadsheet."""
     if not jobs_data:
-        print("⚠️ 出力対象の求人データがありません。")
+        print("⚠️ No job data available to export.")
         return
 
     if isinstance(locations, list):
@@ -429,31 +410,27 @@ def export_to_excel(jobs_data, keyword_display, locations):
             col_letter = col[0].column_letter
             worksheet.column_dimensions[col_letter].width = max(min(max_len + 5, 50), 12)
 
-    print(f"\n📊 派遣・SESハッチング処理済みの Excel ファイルを保存しました: {filename}")
-
 def cleanup_debug_screenshots(locations):
-    """デバッグ用に保存されたスクリーンショット（.png）ファイルを削除する関数"""
+    """Function to clean up and remove temporary PNG screenshots saved during debugging."""
     if isinstance(locations, list):
         loc_list = locations
     else:
         loc_list = [locations]
 
-    print("\n🧹 デバッグ用の一時PNG画像をクリーンアップしています...")
     for loc in loc_list:
         loc_str = str(loc).strip() if loc and str(loc).lower() != "null" else ""
         screenshot_path = f"debug_jobs_{loc_str}.png"
         if os.path.exists(screenshot_path):
             try:
                 os.remove(screenshot_path)
-                print(f"  🗑️ 削除完了: {screenshot_path}")
+                print(f"  🗑️ Deleted successfully: {screenshot_path}")
             except Exception as e:
-                print(f"  ⚠️ 削除失敗 ({screenshot_path}): {e}")
+                print(f"  ⚠️ Failed to delete ({screenshot_path}): {e}")
 
 def search_jobs_test():
     json_config = load_json_config("config.json")
     conditions = json_config["search_conditions"]
 
-    # 1. keyword の取得と解析（辞書型または従来型に対応）
     keyword_config = conditions.get("keyword", "")
     if isinstance(keyword_config, dict):
         kw_values = keyword_config.get("values", [])
@@ -469,7 +446,6 @@ def search_jobs_test():
         keyword_query = ""
         keyword_display = "all"
 
-    # 2. location の取得と解析（辞書型または従来型に対応）
     loc_config = conditions.get("location", [])
     if isinstance(loc_config, dict):
         location_values = loc_config.get("values", [])
@@ -498,7 +474,6 @@ def search_jobs_test():
 
     all_raw_jobs = []
 
-    # 地域リストを順次巡回（各地域の取得結果を統合＝実質的なOR展開）
     for loc in location_list:
         raw_jobs = fetch_google_jobs(keyword_query=keyword_query, location=loc)
         all_raw_jobs.extend(raw_jobs)
@@ -516,7 +491,6 @@ def search_jobs_test():
             seen.add(identifier)
             unique_raw_jobs.append(j)
 
-    # 一次フィルタリング（キーワードのAND/OR判定を適用）
     matched_jobs = filter_jobs_by_profile(
         unique_raw_jobs,
         keyword_config=keyword_config,
@@ -532,7 +506,7 @@ def search_jobs_test():
     print("===============================================================================")
 
     if not matched_jobs:
-        print("⚠️ 条件に合致する公開求人が見つかりませんでした。")
+        print("⚠️ No matching public job listings found.")
         cleanup_debug_screenshots(location_list)
         return
 
