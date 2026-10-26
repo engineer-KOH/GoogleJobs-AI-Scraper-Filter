@@ -4,28 +4,25 @@ import os
 import random
 import re
 import sys
-import urllib.parse
 import time
+import urllib.parse
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
+from openpyxl.styles import Font, PatternFill
 import pandas as pd
 from playwright.sync_api import sync_playwright
-from openpyxl.styles import PatternFill, Font
-#changed work_sue
 load_dotenv()
 
 def load_json_config(file_path="config.json"):
-    """外部の検索条件設定ファイル（JSON）を読み込む関数"""
+    """Loads external search criteria configuration file (JSON)"""
     try:
         with open(file_path, "r", encoding="utf-8") as f:
             return json.load(f)
     except FileNotFoundError:
-        print(f"エラー: 検索条件ファイル {file_path} が見つかりません。")
-        sys.exit(1)
+        raise FileNotFoundError(f"Configuration file {file_path} not found. Execution stopped.") from e
     except json.JSONDecodeError:
-        print(f"エラー: {file_path} のJSON形式が正しくありません。")
-        sys.exit(1)
+        raise ValueError(f"Configuration file {file_path} is not in a valid JSON format. Execution stopped.") from e
 
 def inspect_companies_batch_with_gemini(matched_jobs):
     """
@@ -37,12 +34,14 @@ def inspect_companies_batch_with_gemini(matched_jobs):
     model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
     if not api_key:
-        print(f"⚠️ [.env] GEMINI_API_KEY が設定されていません。AI検証をスキップします。")
-        for job in matched_jobs:
-            job["is_ses_or_dispatch"] = False
-        return matched_jobs
+        # Raise a fatal error instead of suppressing it or returning bogus data,
+        # as the function contract promises to perform AI verification.
+        raise ValueError("❌ Critical Error: GEMINI_API_KEY is not set in the environment variables.")
 
     company_entries = []
+    # Start the index at 1 instead of 0 because this 'idx' is used as a 1-based human-readable 
+    # identifier ("ID") in the Gemini prompt, making it easier for the AI to parse and 
+    # map response data back to the dictionary structure.
     for idx, job in enumerate(matched_jobs, 1):
         company_entries.append(
             f"ID:{idx} | 企業名: {job.get('company')} | 職種: {job.get('title')} | 概要: {job.get('business_summary')[:100]}"
@@ -73,9 +72,10 @@ def inspect_companies_batch_with_gemini(matched_jobs):
 
     max_retries = 3
     for attempt in range(1, max_retries + 1):
+        print(f"🚀 Sending {len(matched_jobs)} jobs to AI ({model_name})... (Attempt: {attempt}/{max_retries})")
+
+        # 🟢 ネットワーク通信（タイムアウト等が起きる場所）だけを try ブロックで囲む
         try:
-            print(f"🚀 {len(matched_jobs)} 件の企業情報をまとめて AI ({model_name}) に送信中... (試行回数: {attempt}/{max_retries})")
-        
             response = client.models.generate_content(
                 model=model_name,
                 contents=prompt,
@@ -84,38 +84,47 @@ def inspect_companies_batch_with_gemini(matched_jobs):
                     temperature=0.2
                 )
             )
-
-            res_text = response.text.strip()
-            data_list = json.loads(res_text)
-            result_map = {item.get("id"): item for item in data_list}
-
-            for idx, job in enumerate(matched_jobs, 1):
-                res = result_map.get(idx, {})
-                is_ses = res.get("is_ses_or_dispatch", False)
-                summary = res.get("business_summary", job.get("business_summary"))
-                reason = res.get("reason", "")
-
-                job["is_ses_or_dispatch"] = is_ses
-                if is_ses:
-                    job["business_summary"] = f"【派遣・SES業】{summary}"
-                    print(f"  🏷️  [ID:{idx}] 【派遣・SES業】判定: {job.get('company')}")
-                else:
-                    job["business_summary"] = summary
-                    print(f"  ✅  [ID:{idx}] 通常求人判定: {job.get('company')}")
-
-            return matched_jobs
-
         except Exception as e:
-            print(f"⚠️ AI検証呼び出しエラー (試行 {attempt}/{max_retries}): {e}")
+            print(f"⚠️ Network connection or API call failed (Attempt {attempt}/{max_retries}): {e}")
             if attempt < max_retries:
                 sleep_sec = attempt * 5
-                print(f"⏳ {sleep_sec} 秒後に再試行します...")
                 time.sleep(sleep_sec)
+                continue  # 次のリトライループへ進む
             else:
-                print("❌ AI判定に失敗しました。今回はAI判定なし（通常出力）で続行します。")
+                print("❌ AI connection failed. Proceeding without AI classification.")
                 for job in matched_jobs:
                     job["is_ses_or_dispatch"] = False
                 return matched_jobs
+
+        # 🟢 通信成功後のデータ処理（JSONパースやマッピング）は try ブロックの外に出す
+        res_text = response.text.strip()
+        data_list = json.loads(res_text)
+        result_map = {item.get("id"): item for item in data_list}
+
+        for idx, job in enumerate(matched_jobs, 1):
+            res = result_map.get(idx, {})
+            is_ses = res.get("is_ses_or_dispatch", False)
+            summary = res.get("business_summary", job.get("business_summary"))
+
+            job["is_ses_or_dispatch"] = is_ses
+            if is_ses:
+                job["business_summary"] = f"【派遣・SES業】{summary}"
+            else:
+                job["business_summary"] = summary
+
+        return matched_jobs
+
+#        except Exception as e:
+#            print(f"⚠️ AI検証呼び出しエラー (試行 {attempt}/{max_retries}): {e}")
+#            if attempt < max_retries:
+#                sleep_sec = attempt * 5
+#                print(f"⏳ {sleep_sec} 秒後に再試行します...")
+#                time.sleep(sleep_sec)
+#            else:
+#                print("❌ AI判定に失敗しました。今回はAI判定なし（通常出力）で続行します。")
+#                for job in matched_jobs:
+#                    job["is_ses_or_dispatch"] = False
+#                return matched_jobs
 
 def fetch_google_jobs(keyword_query, location):
     """求人情報収集関数"""
@@ -196,9 +205,7 @@ def fetch_google_jobs(keyword_query, location):
 
         lines = [line.strip() for line in body_text.split("\n") if line.strip()]
 
-        i = 0
-        while i < len(lines):
-            line = lines[i]
+        for i, line in enumerate(lines):
 
             if "提供元:" in line or "via" in line:
                 title = lines[i-2] if i >= 2 else (lines[i-1] if i >= 1 else "記載なし")
@@ -233,7 +240,6 @@ def fetch_google_jobs(keyword_query, location):
                         "salary": salary,
                         "search_location": loc_str
                     })
-            i += 1
 
         if job_results:
             unique_jobs = []
@@ -382,17 +388,17 @@ def export_to_excel(jobs_data, keyword_display, locations):
     filename = f"job_results_{keyword_display}_{loc_str}_{timestamp}.xlsx"
 
     records = []
-    for job in jobs_data:
+    for row_job in jobs_data:
         records.append({
-            "検索地域": job.get("search_location", ""),
-            "職種タイトル": job.get("title", ""),
-            "企業名": job.get("company", ""),
-            "事業内容 / 掲載概要": job.get("business_summary", ""),
-            "勤務地詳細": job.get("location", ""),
-            "給与条件": job.get("salary", ""),
-            "検知キーワード": ", ".join(job.get("matched_keywords", [])),
-            "掲載サイト": job.get("source", ""),
-            "_is_ses": job.get("is_ses_or_dispatch", False)
+            "検索地域": row_job.get("search_location", ""),
+            "職種タイトル": row_job.get("title", ""),
+            "企業名": row_job.get("company", ""),
+            "事業内容 / 掲載概要": row_job.get("business_summary", ""),
+            "勤務地詳細": row_job.get("location", ""),
+            "給与条件": row_job.get("salary", ""),
+            "検知キーワード": ", ".join(row_job.get("matched_keywords", [])),
+            "掲載サイト": row_job.get("source", ""),
+            "_is_ses": row_job.get("is_ses_or_dispatch", False)
         })
 
     df = pd.DataFrame(records)
