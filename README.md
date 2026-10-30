@@ -31,9 +31,8 @@
 ## 📁 フォルダ構成（Repository Structure）
 ```text
 GoogleJobs-AI-Scraper-Filter/
-├── inputs/              # 検索条件や入力設定ファイル群
-├── outputs/             # フィルタリング・抽出された求人分析結果の出力先
-├── logs/                # 実行ログの保存先
-├── scraper.py           # 求人データの収集（スクレイピング）メインスクリプト
-├── filter.py            # AIおよびロジックによる求人フィルタリング処理
-└── .gitignore           # 機密情報・ログ・成果物の除外設定
+├── inputs/                    # 検索条件や入力設定ファイル群
+├── outputs/                   # フィルタリング・抽出された求人分析結果の出力先
+├── logs/                      # 実行ログの保存先
+├── job_search.py              # 求人収集・AIフィルタリング実行メインスクリプト
+└── .gitignore                 # 機密情報・ログ・成果物（*.key, .env等）の除外設定
