@@ -3,8 +3,8 @@ register_task.py
 
 # 環境変数・機密情報
 .env
-*.bat
-*.key
+.bat
+.key
 
 # 生成物・出力フォルダ
 job_results_*
